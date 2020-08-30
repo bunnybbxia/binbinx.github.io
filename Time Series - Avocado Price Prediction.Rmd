@@ -1,0 +1,298 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+
+
+```{r}
+
+library(magrittr) # needs to be run every time you start R and want to use %>%
+library(dplyr)    # alternatively, this also loads %>%
+avocado <- read.csv(file = '/Users/bxia/Desktop/scu/TimeSeries-Summer2020/Project/avocado.csv')
+head(avocado)
+```
+
+
+
+```{r}
+library(ggplot2)
+# Change the date column from factor to date
+avocado$Date <- as.Date(avocado$Date, "%Y-%m-%d")
+class(avocado$Date)
+
+# Sort the dates
+df <- avocado[order(as.Date(avocado$Date, format="%Y-%m-%d")),]
+
+
+price_trend <- df %>% select(Date, AveragePrice, type) %>%
+ggplot(aes(x=Date, y=AveragePrice)) + geom_area(aes(color=type, fill=type), alpha = 0.3, position = position_dodge(0.8)) + 
+theme_minimal() +  scale_color_manual(values = c("#ED7921", "#62BE51")) + scale_fill_manual(values = c("#FD833E", "#B8FC5F"))
+
+price_trend
+```
+```{r}
+#Density Plot
+options(repr.plot.width=8, repr.plot.height=4)
+ggplot(df, aes(x=AveragePrice, fill=type)) + geom_density() +facet_wrap(~type) + theme_minimal() + 
+  labs(title="Avocado Price by Type") + theme(plot.title = element_text(hjust = 0.5)) + 
+  scale_fill_brewer(palette='Set3')
+```
+
+```{r}
+
+library(tibbletime)
+
+# Filter by type
+organic <- df %>% select(Date, AveragePrice, type, Total.Volume) %>% filter(type == "organic")
+conventional <- df %>% select(Date, AveragePrice, type, Total.Volume) %>% filter(type == "conventional")
+
+# Conventional Avocados
+conventional <- as_tbl_time(conventional, index=Date)
+conventional <- as_period(conventional, '1 month')
+
+
+#Organic Avocados
+organic <- as_tbl_time(organic, index=Date)
+organic <- as_period(organic, '1 month')
+
+```
+
+```{r}
+head(organic)
+head(conventional)
+```
+
+```{r}
+head(df)
+head(organic)
+```
+```{r}
+conventional_ts = ts(conventional)
+library(ggfortify)
+
+```
+
+```{r}
+autoplot(conventional_ts[,c("Total.Volume","AveragePrice")]) +
+  ylab("% change") + xlab("time")
+
+ts1 <- conventional %>%
+  select(Total.Volume) %>%
+  ts(start = 2015, frequency = 12)
+
+ts2 <- conventional %>%
+  select(AveragePrice) %>%
+  ts(start = 2015, frequency = 12)
+
+autoplot(ts1)  +  ylab("Total Volume") + xlab("Year") + ggtitle("Conventional Avocados")
+
+autoplot(ts2) +  ylab("Average Price") + xlab("Year")
+```
+
+```{r}
+#Relationship between time and conventional avocados' average price 
+conventional %>%
+  as.data.frame %>%
+  ggplot(aes(x=Total.Volume, y=AveragePrice)) + ggtitle("Conventional Avocados Total Volume vs. Average Price") + 
+    theme(plot.title = element_text(hjust = 0.5)) +
+    ylab("Average Price") +
+    xlab("Total Volume") +
+    geom_point() +
+    geom_smooth(method="lm", se=FALSE) 
+    
+```
+```{r}
+#Relationship between time and organic avocados' average price 
+organic%>%
+  as.data.frame %>%
+  ggplot(aes(x=Total.Volume, y=AveragePrice)) + ggtitle(" Organic Avocados Total Volume vs. Average Price") + 
+    theme(plot.title = element_text(hjust = 0.5)) +
+    ylab("Average Price") +
+    xlab("Total Volume") +
+    geom_point() +
+    geom_smooth(method="lm", se=FALSE)
+    
+```
+
+
+```{r}
+#Seasonal pattern
+seasonal_df <- df
+
+seasonal_df$month_year <- format(as.Date(df$Date), "%Y-%m")
+seasonal_df$month <- format(as.Date(df$Date), "%m")
+seasonal_df$year <- format(as.Date(df$Date), "%Y")
+
+seasonal_df$monthabb <- sapply(seasonal_df$month, function(x) month.abb[as.numeric(x)])
+seasonal_df$monthabb = factor(seasonal_df$monthabb, levels = month.abb)
+```
+
+```{r}
+#Conventional seasonal price
+conv.price <- seasonal_df %>% select(type,year, monthabb, AveragePrice) %>% filter(type == "conventional", year == c("2015", "2016", "2017")) %>%
+group_by(year, monthabb) %>% summarize(avg=mean(AveragePrice))
+
+#Organic seasonal price
+org.price <- seasonal_df %>% select(type,year, monthabb, AveragePrice) %>% filter(type == "organic", year == c("2015", "2016", "2017")) %>%
+group_by(year, monthabb) %>% summarize(avg=mean(AveragePrice))
+
+conv.price <- ts(conv.price$avg, start=2015, frequency=12)
+org.price <- ts(org.price$avg, start=2015, frequency=12)
+
+conv.price 
+org.price
+```
+
+
+```{r}
+# Price visualization
+library(fpp2)
+
+autoplot(conv.price) + ylab("Average Price") + xlab("Year") + ggtitle("Conventional Avocados")
+ggAcf(conv.price, lag = 12) + ggtitle("Autocorrelation for Conventional Avocados")
+
+autoplot(org.price) + ylab("Average Price") + xlab("Year") + ggtitle("Organic Avocados")
+ggAcf(org.price, lag = 12) + ggtitle("Autocorrelation for Organic Avocados")
+```
+
+
+
+```{r}
+#Basic Time Series Model - mean, naive, rwf, seasonal naive.
+#Predict the following 24 months price, which is 2020 Septmember, next month
+conv_ts <- ts(conventional[,2], start=c(2015, 1), frequency=12)
+
+conv_fit1 <- meanf(conv_ts, h=24)
+conv_fit2 <- naive(conv_ts, h=24)
+conv_fit3 <- rwf(conv_ts,h=24)
+conv_fit4 <- snaive(conv_ts, h=24)
+
+conv_ts <- window(conv_ts)
+
+autoplot(conv_ts) +
+  autolayer(meanf(conv_ts, h=24), PI=FALSE, series="Mean") +
+  autolayer(naive(conv_ts, h=24), PI=FALSE, series="Naive") +
+  autolayer(snaive(conv_ts, h=24), PI=FALSE, series="Seasonal naive") +
+  autolayer(rwf(conv_ts,drift=TRUE, h=24),PI=FALSE, series="Drift") +
+  ggtitle("Forecasts for Conventional Avocado Price") +
+  xlab("Year") + ylab("Price") +
+  guides(colour=guide_legend(title="Forecast"))
+
+accuracy(conv_fit1)
+accuracy(conv_fit2)
+accuracy(conv_fit3)
+accuracy(conv_fit4)
+
+```
+```{r}
+#Repeat last step for Organic Avocados
+org_ts <- ts(organic[,2], start=c(2015, 1), frequency=12)
+
+org_fit1 <- meanf(org_ts, h=24)
+org_fit2 <- naive(org_ts, h=24)
+org_fit3 <- rwf(org_ts,h=24)
+org_fit4 <- snaive(org_ts, h=24)
+
+org_ts <- window(org_ts)
+autoplot(org_ts) +
+  autolayer(meanf(org_ts, h=24), PI=FALSE, series="Mean") +
+  autolayer(naive(org_ts, h=24), PI=FALSE, series="Naive") +
+  autolayer(snaive(org_ts, h=24), PI=FALSE, series="Seasonal naive") +
+  autolayer(rwf(org_ts,drift=TRUE, h=24),PI=FALSE, series="Drift") +
+  ggtitle("Forecasts for Organic Avocado Price") +
+  xlab("Year") + ylab("Price") +
+  guides(colour=guide_legend(title="Forecast"))
+
+accuracy(org_fit1)
+accuracy(org_fit2)
+accuracy(org_fit3)
+accuracy(org_fit4)
+```
+```{r}
+#ETS model -- Conventional Avocados
+conv.price %>% ets() %>% forecast(h=24) %>% autoplot() + ggtitle("Conventional Avocado ETS model")
+conv.price %>% ets() %>% forecast(h=24) %>% summary()
+```
+
+```{r}
+#ETS Model -- Organic Avocados
+org.price %>% ets() %>% forecast(h=24) %>% autoplot() + ggtitle("Organic Avocado ETS model")
+org.price %>% ets() %>% forecast(h=24) %>% summary()
+```
+
+```{r}
+# Stationary Check -- Conventional Avocados
+ggtsdisplay(conv_ts)
+ndiffs(conv_ts)
+ggtsdisplay(diff(conv_ts))
+```
+```{r}
+library(urca)
+summary(ur.kpss(conv_ts))
+
+library(urca)
+summary(ur.kpss(org_ts))
+```
+
+```{r}
+# Stationary Check -- Organic Avocados
+ggtsdisplay(org_ts)
+ndiffs(org_ts)
+ggtsdisplay(diff(org_ts))
+```
+
+
+```{r}
+# Auto ARIMA - Conventinal Avocados
+fit_ar <- Arima(conv_ts,order=c(0,1,1))
+summary(fit_ar)
+
+fitauto <- auto.arima(conv_ts, d=1, D=1, stepwise=FALSE,
+           approximation=FALSE, trace = TRUE)
+summary(fitauto)
+
+auto.arima(conv_ts, stepwise=FALSE,
+           approximation=FALSE)
+
+checkresiduals(fitauto)
+
+fitauto %>% forecast %>% autoplot
+fitauto %>% forecast(h=41) %>% summary()
+
+```
+```{r}
+# Stationary Check - Organic Avocados
+ggtsdisplay(org_ts)
+ndiffs(org_ts)
+ggtsdisplay(diff(org_ts))
+```
+
+
+```{r}
+# Auto ARIMA - Organic Avocados
+fit_ar <- Arima(org_ts,order=c(0,1,1))
+summary(fit_ar)
+
+fitauto <- auto.arima(org_ts, d=1, D=1, stepwise=FALSE,
+           approximation=FALSE, trace = TRUE)
+summary(fitauto)
+
+auto.arima(org_ts, stepwise=FALSE,
+           approximation=FALSE)
+
+checkresiduals(fitauto)
+
+fitauto %>% forecast %>% autoplot
+
+fitauto %>% forecast(h=41) %>% summary()
+
+```
+
+
+
+
+
+
+
+.
