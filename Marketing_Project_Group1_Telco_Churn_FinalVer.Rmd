@@ -1,0 +1,470 @@
+---
+title: "R Notebook"
+output: html_notebook
+author: "Group1 : Binbin Xia, Ritu Ranjani Ravi Shankar, Xiumin Sun, Abir Chakraborty"
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Ctrl+Shift+Enter*. 
+
+```{r}
+# Loading the libraries 
+library(survival)
+library(survminer)
+library(lubridate)
+library(caret)
+library(ranger)
+library(ggplot2)
+library(ggfortify)
+library(tidyverse)
+library(dplyr)
+library(dummies)
+library(data.table)
+library(MASS)
+library(caret)
+```
+
+
+Reading the data into a dataframe.
+
+```{r}
+df = Customer_Churn = df_telco = read.csv('TelcoCustomerChurn.csv')
+df_telco[is.na(df_telco)] <- 0
+```
+
+```{r}
+# Drop variables
+df$customerID <- NULL
+df$gender <- as.factor(df$gender)
+
+Clean_Customer_Churn <- subset(Customer_Churn, select =-c(customerID,TotalCharges,tenure))
+glimpse(Clean_Customer_Churn)
+```
+
+# Random Forest
+
+```{r}
+#Create train/test set
+create_train_test <- function(data, size = 0.75, train = TRUE) {
+  n_row = nrow(data)
+  total_row = size * n_row
+  train_sample <- 1: total_row
+  if (train == TRUE) {
+    return (data[train_sample, ])
+  } else {
+    return (data[-train_sample, ])
+  }
+}
+data_train <- create_train_test(Clean_Customer_Churn, 0.75, train = TRUE)
+data_test <- create_train_test(Clean_Customer_Churn, 0.75, train = FALSE)
+dim(data_train)
+dim(data_test)
+```
+
+```{r}
+prop.table(table(data_train$Churn))
+prop.table(table(data_test$Churn))
+```
+
+
+
+```{r}
+#Build model on train set
+library(rpart)
+library(rpart.plot)
+fit <- rpart(Churn~., data = data_train, method = 'class')
+rpart.plot(fit, extra = 106)
+```
+
+```{r}
+predict_unseen <-predict(fit, data_test, type = 'class')
+table_mat <- table(data_test$Churn, predict_unseen)
+table_mat
+accuracy_Test <- sum(diag(table_mat)) / sum(table_mat)
+print(paste('Accuracy for test', accuracy_Test))
+```
+
+
+
+```{r}
+library(randomForest)
+rf_classifier = randomForest(Churn ~ ., data=data_train, ntree=100)
+varImpPlot(rf_classifier)
+```
+
+Conclusion for Random Forest:
+On random forest, we found out that Contract, Internet Service, Online Security, and Payment Method are important variables for customer churn. For example, if a customer has month-to-month contract and the Internet Service is Fiber optic, the rate that this customer will churn is 54%.
+
+# Naive Bayes
+```{r}
+library(caTools)
+set.seed(123) #Ensures the same random numbers are always generated 
+sample = sample.split(df,SplitRatio = 0.75) 
+train =subset(df,sample ==TRUE) 
+test=subset(df, sample==FALSE)
+str(train)
+```
+
+```{r}
+library(e1071)
+nb<-naiveBayes(Churn ~ ., data = train)
+predicted_nb= predict(nb,test)
+#Prediction results
+table(predicted_nb) #Tabulate data
+```
+
+```{r}
+#Visualize results
+plot(predicted_nb, test$Churn, main="Predicted Vs. Actual - Naive Bayes", ylab="Predicted",xlab="Actual")
+```
+
+```{r}
+nb
+```
+
+```{r}
+#Evaluate performance of model
+confusionMatrix(predicted_nb,test$Churn) #Accuracy: 71.36%
+```
+
+For the Naive Bayes model, we found out that:
+Based on Demographic Info, customers who have Partner and Dependent are 18% less likely to churn.
+
+For Service category, more service customers have Online Security Service
+Online Backup Service, Device Protection, Tech Support, Streaming TV/Movies those services, they tend to stay.
+However, for the InternetService-FiberOpticService, customers are 30% more likely to churn.
+
+For Payment Method, customers who have PaperBilling and ElectronicCheck have 20% and 32% more chances to churn.
+
+
+# Binary Logist Model
+## Choose the model with the lowest AIC score
+It could be some endogeneity issues to fit in this model.
+
+```{r}
+d1 = data.frame(y=df[,20],df[,1:18])
+d1
+#using interaction variables
+bl_result3 = glm(y~SeniorCitizen + Contract + PaperlessBilling + PaymentMethod + MonthlyCharges + SeniorCitizen * MonthlyCharges + tenure * OnlineSecurity , d1, family="binomial")
+summary(bl_result3)
+```
+For the Binary Logit Model we chosen here with the lowest AIC, SeniorCitizen, ContractOneYear/TwoYear, PaperlessBillingYes, PaymentMethodElectornic check, MonthlyCharges, tenure, OnlineSecurityYes are significant important variables. 
+
+SeniorCitizen has a positive relationship with Customer Churn result, which means Senior Customers are more likely to churn compare to Non-senior Customers.
+
+ContractOneYear and ContractTwoYear all have negative relationship with Customer Churn result. The longer the contract, the less likely customers are gonna churn.
+
+PayperlessBillingYes and PaymentMethodElectronic check are all having somewhat positive relationship with Customer Churn result. With these two PaymentMethod and Billing method, customers are more likely to Churn.
+
+With the OnlineSecurityYes, we could see customers who are with this service are less likely to Churn as well.
+
+
+# Survival Analysis
+
+Normalizing TotalCharges and MonthlyCharges column.
+
+```{r}
+df_telco$TotalCharges = (df_telco$TotalCharges - mean(df_telco$TotalCharges))/ sd(df_telco$TotalCharges)
+df_telco$MonthlyCharges = (df_telco$MonthlyCharges - mean(df_telco$MonthlyCharges))/ sd(df_telco$MonthlyCharges)
+```
+
+Converting the Categorical columns that is in different datatype into factor.
+
+```{r}
+cols <- c("gender" , "SeniorCitizen","Partner","Dependents","PhoneService" ,"MultipleLines","InternetService" , "OnlineSecurity",   "OnlineBackup"  ,   "DeviceProtection", "TechSupport"   ,   "StreamingTV"     
+, "StreamingMovies" , "Contract"     ,    "PaperlessBilling", "PaymentMethod"  , "Churn")
+ 
+ df_telco[,cols] <- lapply(df_telco[,cols], factor)
+ 
+```
+
+One-hot encoding the categorical columns.
+
+```{r}
+df_telco$customerID <- NULL
+dummy <- dummyVars(" ~ .", data = df_telco)
+df_surv <- data.frame(predict(dummy, newdata = df_telco))
+```
+
+#### Non-parametric Estimation
+
+#### Kaplan – Meier Estimates
+
+We define the event and the time to fit the model for survival analysis.
+
+time - tenure, how long the customer is availing the Telco service
+event - the event here is, if the customer will churn or not.
+
+```{r}
+# tenure is the time to estimate our model
+time <- as.integer(df_telco$tenure)
+
+# the event is the customer has churned, so extracting the churn column as event.
+event <- df_surv$Churn.Yes
+
+# Creating the survival object
+telco_Surv<-Surv(time,event)
+
+```
+
+
+
+#### Fitting the Kaplan Meier survival model
+
+The survfit() function takes a survival object (the one which Surv() produces) and creates the survival curves.
+
+```{r}
+
+## single survival curve with no comparisons
+telco_fit<- survfit((telco_Surv~1)) ## single curve for all customers in the dataset
+summary(telco_fit)
+
+```
+
+
+#### Plotting the survival model to fit a single curve for all the customers
+
+
+```{r}
+autoplot(telco_fit, main = "Survival curve for all customers", ylab = "survival probablity")
+```
+
+
+
+```{r}
+# Km fit against Internet service
+fit_internet<- survfit(Surv(time, event) ~ df_telco$InternetService) 
+autoplot(fit_internet)
+
+fit_internet
+
+```
+
+
+```{r}
+# Km fit against PaymentMethod
+fit_payment <- survfit(Surv(time, event) ~ df_telco$PaymentMethod) 
+autoplot(fit_payment)
+```
+
+
+```{r}
+# Km fit against PaperlessBilling
+
+fit_billing <- survfit(Surv(time, event) ~ df_telco$PaperlessBilling) 
+autoplot(fit_billing)
+
+```
+    
+
+```{r}
+# Km fit against Contract
+fit_contract <- survfit(Surv(time, event) ~ df_telco$Contract) 
+autoplot(fit_contract)
+```
+
+## Semi-Parametric model :  Cox proportional Hazard Model
+
+#### Performing STEPAIC for feature identification
+
+```{r}
+x <- df_telco[,2:(ncol(df_telco)-1)]
+x$tenure <- NULL
+x$TotalCharges <- NULL
+
+cox <- coxph(telco_Surv~. ,x)
+cox2 <- stepAIC(cox, trace = 0)
+summary(cox2)
+```
+
+
+#### Multivariate Cox regression analysis using Coxph():
+
+With the identified variables from the above step and general analysis, running the cox regression with the surv() object. 
+
+```{r}
+coxph_mod <- coxph(telco_Surv~InternetService.Fiber.optic+InternetService.No+PaymentMethod.Credit.card..automatic.
+                  +PaymentMethod.Electronic.check+PaymentMethod.Mailed.check+OnlineSecurity.Yes+TechSupport.Yes
+                  +PaperlessBilling.Yes+Partner.Yes+MonthlyCharges+Contract.One.year+Contract.Two.year
+                  +(MonthlyCharges*Contract.One.year)+(MonthlyCharges*Contract.Two.year)+MultipleLines.Yes+MultipleLines.No.phone.service+OnlineBackup.Yes+DeviceProtection.Yes+StreamingMovies.Yes,data = df_surv)
+
+summary(coxph_mod)
+```
+
+
+#### Coxph model Visualization
+
+```{r}
+survfit(coxph_mod)
+
+autoplot(survfit(coxph_mod))
+```
+
+#### GGforest plot to visualize hazard rate.
+
+```{r}
+ggforest(coxph_mod, data = df_surv, fontsize = 0.60, refLabel = "reference")
+```
+
+
+#### Model Interpretation
+
+From the above we see that , Fibre optic service, Electronic/mailed check and Paperless billing are at higher risk of churning.
+
+If there is a unit change in these covariates, the customers in these services are at higher risk of churning.
+
+
+## Parametric Model : Weibull Model:
+
+The error distribution is considered to be a weibull distruction instead of normal distribution as in the case of linear regression.
+
+Use the same variates from the coxph model to study the effect of attributes on customer churn.
+
+```{r}
+weibull <- survreg(Surv(df_surv$tenure+1,df_surv$Churn.Yes) ~ InternetService.Fiber.optic+InternetService.No+PaymentMethod.Credit.card..automatic.
+                  +PaymentMethod.Electronic.check+PaymentMethod.Mailed.check+OnlineSecurity.Yes+TechSupport.Yes
+                  +PaperlessBilling.Yes+Partner.Yes+MonthlyCharges+Contract.One.year+Contract.Two.year
+                  +(MonthlyCharges*Contract.One.year)+(MonthlyCharges*Contract.Two.year)+MultipleLines.Yes+MultipleLines.No.phone.service+OnlineBackup.Yes+DeviceProtection.Yes+StreamingMovies.Yes,data = df_surv,dist = "weibull")
+
+summary(weibull)
+```
+
+#### Model Interpretation
+
+From the above we see that , the model gives the same interpretation as the coxph model.
+The Fibre optic service, Electronic/mailed check and Paperless billing are at higher risk of churning, except that the negative sign here denotes churning.
+
+If there is a unit change in these covariates, the customers in these services are at higher risk of churning.
+
+# Support Vector Machine (SVM)
+## Notice: the SVM code takes a long time to execute!!
+Install All Packages
+```{r cars}
+#check for installed packages
+packages <- c("caret", "data.table", "corrplot", "rattle", "randomForest", "C50", "rpart", "ROCR", "e1071","gmodels")
+if (length(setdiff(packages, rownames(installed.packages()))) > 0) {
+  install.packages(setdiff(packages, rownames(installed.packages())))  
+}
+
+library(caret)
+library(ggplot2)
+library(data.table)
+library(car)
+library(corrplot)
+library(rattle)
+library(randomForest)
+library(C50)
+library(rpart)
+library(ROCR)
+library(e1071)
+library(gmodels)
+library(data.table)
+cust_data <- fread('TelcoCustomerChurn.csv', header = TRUE, sep = ",")
+```
+
+## #########################
+# Data Cleaning            #        
+## #########################
+
+### Remove  Unwanted Variables
+### Handling Missing Values: Replace NAs as 0
+### Recode Variables: Recode using the library(car) package
+### Convert column to factor
+
+```{r pressure, echo=FALSE}
+# Remove Unwanted Variables
+cust_data <- cust_data[, -1]
+
+# Handling Missing Values: Replace NAs as 0
+cust_data[is.na(cust_data)] <- 0
+
+# Recode Variables: Replace Churn status, Yes = 1, No = 1
+cust_data$Churn <- replace(cust_data$Churn, cust_data$Churn == "No", 0)
+cust_data$Churn <- replace(cust_data$Churn, cust_data$Churn == "Yes", 1)
+cust_data$Churn <- as.numeric(cust_data$Churn)
+cust_data$tenure <- NULL
+
+# Recode Variables: Recode using the library(car) package
+cust_data$gender <- recode(cust_data$gender, "'Male'=1; 'Female'=0")
+cust_data$Partner <- recode(cust_data$Partner, "'Yes'=1; 'No'=0")
+cust_data$Dependents <- recode(cust_data$Dependents, "'Yes'=1; 'No'=0")
+cust_data$PhoneService <- recode(cust_data$PhoneService, "'Yes'=1; 'No'=0")
+cust_data$MultipleLines <- recode(cust_data$MultipleLines, "'Yes'=1; 'No'=0;'No phone service'=3")
+cust_data$InternetService <- recode(cust_data$InternetService, "'No'=0; 'DSL'=1;'Fiber optic'=2")
+cust_data$OnlineSecurity <- recode(cust_data$OnlineSecurity, "'No'=0; 'Yes'=1;'No internet service'=2")
+cust_data$OnlineBackup <- recode(cust_data$OnlineBackup, "'No'=0; 'Yes'=1;'No internet service'=2")
+cust_data$DeviceProtection <- recode(cust_data$DeviceProtection, "'No'=0; 'Yes'=1;'No internet service'=2")
+cust_data$TechSupport <- recode(cust_data$TechSupport, "'No'=0; 'Yes'=1;'No internet service'=2")
+cust_data$StreamingTV <- recode(cust_data$StreamingTV, "'No'=0; 'Yes'=1;'No internet service'=2")
+cust_data$StreamingMovies <- recode(cust_data$StreamingMovies, "'No'=0; 'Yes'=1;'No internet service'=2")
+cust_data$Contract <- recode(cust_data$Contract, "'Month-to-month'=0; 'One year'=1;'Two year'=2")
+cust_data$PaperlessBilling <- recode(cust_data$PaperlessBilling, "'Yes'=1; 'No'=0")
+cust_data$PaymentMethod <- recode(cust_data$PaymentMethod, "'Electronic check'=1; 'Mailed check'=2;'Bank transfer (automatic)'=3; 'Credit card (automatic)'=4")
+
+#convert column to factor
+cust_data[, 'Churn'] <- lapply(cust_data[, 'Churn'], factor)
+
+```
+## #################################
+# Data Exploratory                 #
+## #################################
+## Display Covariance Matrix
+```{r}
+corrmatrix <- round(cor(cust_data[, - 'Churn']), digits = 2)
+corrmatrix
+```
+### heatmap of correlation matrix using ggplot2
+```{r}
+#png('correlation_matrix.png')
+qplot(x = Var1, y = Var2, data = melt(cor(cust_data[, - 'Churn'], use = "p")), fill = value, geom = "tile") + scale_fill_gradient2(limits = c(-1, 1)) + labs(title = "Correlation Matrix")
+```
+#### Convert to categorical/factor variables
+```{r}
+cust_data$gender <- factor(cust_data$gender)
+cust_data$SeniorCitizen <- factor(cust_data$SeniorCitizen )
+cust_data$Partner <- factor(cust_data$Partner)
+cust_data$Dependents <- factor(cust_data$Dependents)
+cust_data$PhoneService <- factor(cust_data$PhoneService)
+cust_data$MultipleLines <- factor(cust_data$MultipleLines)
+cust_data$InternetService <- factor(cust_data$InternetService)
+cust_data$OnlineSecurity <- factor(cust_data$OnlineSecurity)
+cust_data$OnlineBackup <- factor(cust_data$OnlineBackup)
+cust_data$DeviceProtection <- factor(cust_data$DeviceProtection)
+cust_data$TechSupport <- factor(cust_data$TechSupport)
+cust_data$StreamingTV <- factor(cust_data$StreamingTV)
+cust_data$StreamingMovies <- factor(cust_data$StreamingMovies)
+cust_data$Contract <- factor(cust_data$Contract)
+cust_data$PaperlessBilling <- factor(cust_data$PaperlessBilling)
+cust_data$PaymentMethod <- factor(cust_data$PaymentMethod)
+```
+
+## #########################################
+# Model Building                           #
+## #########################################
+```{r}
+library(caret)
+set.seed(1234)
+intrain <- createDataPartition(y = cust_data$Churn, p = 0.8, list = FALSE, times = 1)
+training <- cust_data[intrain,]
+testing <- cust_data[ - intrain,]
+summary(cust_data)
+str(cust_data)
+```
+## Tune the SVM Mode
+# Caution... This Peice of code would take long time to execute(more than 20-30 minute) and any new parameter tuning would result in execution time exceeding the 20-30 minute time window.
+```{r}
+svm <- tune.svm(Churn ~ ., data = training, seq(0.5, 0.9, by = 0.1), cost = seq(100, 1000, by = 100), kernel = "radial", tunecontrol = tune.control(cross = 10))
+print(svm)
+summary(svm)
+svm$performances
+# Find the best SVM model
+svmfit <- svm$best.model
+```
+## Test The Model
+```{r}
+svmpred <- predict(svmfit, testing[, -20], type = 'response')
+# Confusion Matrix
+CrossTable(testing$Churn, svmpred, prop.chisq = FALSE, prop.c = FALSE, prop.r = FALSE, dnn = c('actual default', 'predicted default'))
+svmpred <- as.numeric(levels(svmpred))[svmpred]
+CrossTable(testing$Churn, svmpred, prop.chisq = FALSE, prop.c = FALSE, prop.r = FALSE, dnn = c('actual default', 'predicted default'))
